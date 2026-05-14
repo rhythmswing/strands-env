@@ -18,6 +18,7 @@ import asyncio
 import time
 from unittest.mock import MagicMock
 
+import botocore.exceptions
 import pytest
 
 from strands_env.tools.code_interpreter import CodeInterpreterQuotas, CodeInterpreterToolkit
@@ -38,7 +39,51 @@ def _mock_client(session_id: str = "sess-1", invoke_result: str = "42") -> Magic
     return client
 
 
+class _AsyncStream:
+    """Small async iterator for AgentCore EventStream test doubles."""
+
+    def __init__(self, events):
+        self._events = list(events)
+
+    def __aiter__(self):
+        self._iter = iter(self._events)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _AsyncClient:
+    """Minimal async Bedrock AgentCore client test double."""
+
+    def __init__(self, session_id: str = "sess-async", invoke_result: str = "42"):
+        self.session_id = session_id
+        self.invoke_result = invoke_result
+        self.started = 0
+        self.invoked = 0
+        self.stopped = 0
+
+    async def start_code_interpreter_session(self, **_kwargs):
+        self.started += 1
+        return {"sessionId": self.session_id}
+
+    async def invoke_code_interpreter(self, **_kwargs):
+        self.invoked += 1
+        return {"stream": _AsyncStream([{"result": {"content": [{"type": "text", "text": self.invoke_result}]}}])}
+
+    async def stop_code_interpreter_session(self, **_kwargs):
+        self.stopped += 1
+        return {}
+
+
 class TestCodeInterpreterToolkit:
+    def test_constructor_rejects_ambiguous_clients(self):
+        with pytest.raises(ValueError, match="Pass client or aio_client"):
+            CodeInterpreterToolkit(client=_mock_client(), aio_client=_AsyncClient())
+
     async def test_invoke_and_cleanup(self):
         """Full lifecycle: start session, invoke, parse result, cleanup."""
         client = _mock_client(invoke_result="hello")
@@ -55,15 +100,16 @@ class TestCodeInterpreterToolkit:
         client.stop_code_interpreter_session.assert_called_once()
 
     async def test_invoke_parses_error_events(self):
-        """Throttling errors in EventStream are returned as strings (issue #24)."""
+        """Throttling errors in EventStream are raised as client errors."""
         client = _mock_client()
         client.invoke_code_interpreter.return_value = {
             "stream": [{"throttlingException": {"message": "Rate exceeded"}}]
         }
         toolkit = CodeInterpreterToolkit(client=client)
-        result = await toolkit.invoke("executeCode", {"code": "x", "language": "python"})
-        assert "throttlingException" in result
-        assert "Rate exceeded" in result
+        with pytest.raises(botocore.exceptions.ClientError) as exc_info:
+            await toolkit.invoke("executeCode", {"code": "x", "language": "python"})
+        assert exc_info.value.response["Error"]["Code"] == "ThrottlingException"
+        assert exc_info.value.response["Error"]["Message"] == "Rate exceeded"
 
     async def test_invoke_no_result(self):
         client = _mock_client()
@@ -71,6 +117,21 @@ class TestCodeInterpreterToolkit:
         toolkit = CodeInterpreterToolkit(client=client)
         result = await toolkit.invoke("executeCode", {"code": "x", "language": "python"})
         assert result == "No result returned."
+
+    async def test_aio_client_invoke_and_cleanup(self):
+        """Async clients are awaited directly and async EventStreams are parsed."""
+        client = _AsyncClient(invoke_result="hello async")
+        toolkit = CodeInterpreterToolkit(aio_client=client)
+
+        result = await toolkit.invoke("executeCode", {"code": "print('hello')", "language": "python"})
+
+        assert result == "hello async"
+        assert client.started == 1
+        assert client.invoked == 1
+
+        await toolkit.cleanup()
+        assert toolkit.session_id is None
+        assert client.stopped == 1
 
     async def test_semaphore_released_on_start_failure(self):
         """Semaphore must be released if start_code_interpreter_session fails."""

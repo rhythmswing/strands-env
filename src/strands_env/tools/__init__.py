@@ -14,13 +14,41 @@
 
 """Tools for `strands_env`."""
 
-from .code_interpreter import CodeInterpreterQuotas, CodeInterpreterToolkit
-from .web_scraper import WebScraperToolkit
-from .web_search import WebSearchToolkit
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+from .agent_core_pool import AgentCorePool, AgentCorePoolConfig, AgentCorePoolStats, AgentCoreSessionState
+from .code_interpreter import CodeInterpreterQuotas, CodeInterpreterToolkit, create_aio_client
+
+if TYPE_CHECKING:
+    from .web_scraper import WebScraperToolkit
+    from .web_search import WebSearchToolkit
+
+_LAZY_EXPORTS = {
+    "WebScraperToolkit": (".web_scraper", "WebScraperToolkit"),
+    "WebSearchToolkit": (".web_search", "WebSearchToolkit"),
+}
 
 __all__ = [
+    "AgentCorePool",
+    "AgentCorePoolConfig",
+    "AgentCorePoolStats",
+    "AgentCoreSessionState",
     "CodeInterpreterQuotas",
     "CodeInterpreterToolkit",
+    "create_aio_client",
     "WebScraperToolkit",
     "WebSearchToolkit",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attr_name)
+    globals()[name] = value
+    return value

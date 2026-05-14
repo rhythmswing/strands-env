@@ -56,3 +56,4 @@ async def reward_func(args, sample, **kwargs):
 - **Token observations**: `TokenObservation` contains token IDs and logprobs for on-policy training (SGLang backend only)
 - **Async rewards**: Reward is computed separately to allow async/batched reward computation
 - **Model factory pattern**: Each `step()` creates a fresh model instance for clean token tracking state
+- **Coding harness rewards**: AgentCore async transport and hidden-test harness design principles are documented in [AgentCore Async Harness Reward Design](agentcore-async-harness-reward.md)

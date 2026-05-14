@@ -14,8 +14,11 @@
 
 """Core module: environment, types, and model factories."""
 
-from .environment import AsyncEnvFactory, Environment, EnvironmentConfig
-from .models import ModelFactory
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
 from .types import (
     Action,
     Observation,
@@ -26,6 +29,17 @@ from .types import (
     TerminationReason,
     TokenObservation,
 )
+
+if TYPE_CHECKING:
+    from .environment import AsyncEnvFactory, Environment, EnvironmentConfig
+    from .models import ModelFactory
+
+_LAZY_EXPORTS = {
+    "AsyncEnvFactory": (".environment", "AsyncEnvFactory"),
+    "Environment": (".environment", "Environment"),
+    "EnvironmentConfig": (".environment", "EnvironmentConfig"),
+    "ModelFactory": (".models", "ModelFactory"),
+}
 
 __all__ = [
     "Action",
@@ -41,3 +55,13 @@ __all__ = [
     "TerminationReason",
     "TokenObservation",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attr_name)
+    globals()[name] = value
+    return value
